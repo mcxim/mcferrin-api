@@ -79,7 +79,8 @@ def get_user(id):
 def update_user(id):
     user = User.query.get(id)
     for field in request.json:
-        setattr(user, field, request.json[field])
+        if request.json[field] != " ":
+            setattr(user, field, request.json[field])
     db.session.commit()
     return user_schema.jsonify(user)
 
