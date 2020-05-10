@@ -8,8 +8,6 @@ import datetime
 from functools import wraps
 import base64
 import binascii
-from pprint import pprint
-
 import os
 
 # Init app
@@ -70,16 +68,13 @@ all_info_schema = UserSchema(many=True)
 def token_required(f):
     @wraps(f)
     def decorator(*args, **kwargs):
-        print("requiring token!")
         token = None
         if "x-access-tokens" in request.headers:
             token = request.headers["x-access-tokens"]
         if not token:
             return jsonify({"Error": "a valid tolkien is missing"}), 401
         try:
-            print(token)
             data = jwt.decode(token, app.config["SECRET_KEY"])
-            print(data)
             current_user = User.query.filter_by(public_id=data["public_id"]).first()
         except Exception as e:
             return jsonify({"Error": "tolkien is invalid " + str(e)}), 401
@@ -90,45 +85,47 @@ def token_required(f):
 
 @app.route("/register", methods=["POST"])
 def create_user():
-    print("request.json: " + str(request.json))
     if not request.json:
         return jsonify({"Error": "request json is not present."}), 400
     missing_fields = [
-        field for field in ["username", "password"] if field not in request.json
+        field for field in ["username", "password", "data"] if field not in request.json
     ]
     if missing_fields:
         return jsonify(
             {"Error": "The following fields are missing: " + str(missing_fields)}
         )
     username = request.json["username"]
-    hex_login = request.json["password"]
+    b64_login = request.json["password"]
+    data = request.json["data"]
     if User.query.filter_by(username=username).first() != None:
         return jsonify({"Error": "This username already exists in the database."}), 400
     try:
-        login_hash = bytes.fromhex(hex_login)
-    except ValueError:
-        return jsonify({"Error": "Invalid hexadecimal login hash"})
+        login_hash = base64.b64decode(b64_login)
+    except binascii.Error:
+        return jsonify({"Error": "Invalid base64 login hash"}), 400
     stored_hash = generate_password_hash(login_hash, method="pbkdf2:sha256:100100")
     new_user = User(
-        public_id=str(uuid.uuid4()), username=username, password=stored_hash, data=""
+        public_id=str(uuid.uuid4()), username=username, password=stored_hash, data=data
     )
     db.session.add(new_user)
     db.session.commit()
-    return (jsonify({"OK": "Success"}), 201)
+    return (user_schema.jsonify(new_user), 201)
 
 
 @app.route("/login", methods=["GET"])
 def login_user():
-    print(request.headers["Authorization"])
     auth = request.authorization
-    print(auth)
     if not auth or not auth.username or not auth.password:
-        return jsonify({"Error": "Could not verify - Login required"}, 401)
+        return jsonify({"Error": "Could not verify - Login required"}), 401
     try:
-        login_hash = bytes.fromhex(auth.password)
-    except ValueError:
-        return jsonify({"Error": "Invalid hexadecimal login hash"})
+        login_hash = base64.b64decode(auth.password)
+    except binascii.Error:
+        return jsonify({"Error": "Invalid base64 login hash"}), 401
     user = User.query.filter_by(username=auth.username).first()
+    if not user:
+        return jsonify(
+            {"Error": "Username invalid. please check your spelling to register."}
+        ), 401
     if check_password_hash(user.password, login_hash):
         token = jwt.encode(
             {
@@ -156,9 +153,10 @@ def get_user_data(user):
 @app.route("/user/data", methods=["PUT"])
 @token_required
 def update_data(user):
-    print(request.data)
-    user.data = request.data.decode("ascii")
+    user.data = request.json["data"]
+    db.session.commit()
     return ("", 204)
+
 
 @app.route("/user", methods=["DELETE"])
 @token_required
@@ -166,6 +164,7 @@ def delete_user(user):
     db.session.delete(user)
     db.session.commit()
     return ("", 204)
+
 
 @app.route("/admin/<id>", methods=["DELETE"])
 def admin_delete_user(id):
